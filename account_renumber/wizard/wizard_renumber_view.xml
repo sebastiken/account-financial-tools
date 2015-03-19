@@ -12,12 +12,10 @@
                     <p>Posted moves from those journals will be sorted by date and then assigned sequential numbers using their journal sequence.</p>
                     <group string="General Data">
                         <field name="number_next"/>
+                        <field name="padding"/>
                     </group>
-                    <group string="Journals and periods to consider">
+                    <group string="Periods to consider">
                         <notebook colspan="4">
-                            <page string="Journals">
-                                <field name="journal_ids" editable="top"/>
-                            </page>
                             <page string="Periods">
                                 <field name="period_ids" editable="top"/>
                             </page>

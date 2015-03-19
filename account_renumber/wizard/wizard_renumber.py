@@ -29,12 +29,6 @@ class wizard_renumber(orm.TransientModel):
     _name = "wizard.renumber"
     _description = "Account renumber wizard"
     _columns = {
-        'journal_ids': fields.many2many('account.journal',
-                                        'account_journal_wzd_renumber_rel',
-                                        'wizard_id', 'journal_id',
-                                        required=True,
-                                        help="Journals to renumber",
-                                        string="Journals"),
         'period_ids': fields.many2many('account.period',
                                        'account_period_wzd_renumber_rel',
                                        'wizard_id', 'period_id',
@@ -44,6 +38,7 @@ class wizard_renumber(orm.TransientModel):
         'number_next': fields.integer('First Number', required=True,
                                       help="Journal sequences will start "
                                            "counting on this number"),
+        'padding' : fields.integer('Number Padding', required=True, help="OpenERP will automatically adds some '0' on the left of the 'Next Number' to get the required padding size."),
         'state': fields.selection([('init', 'Initial'),
                                    ('renumber', 'Renumbering')], readonly=True)
     }
@@ -82,19 +77,21 @@ class wizard_renumber(orm.TransientModel):
         logger = logging.getLogger("account_renumber")
         form = self.browse(cr, uid, ids[0], context=context)
         period_ids = [x.id for x in form.period_ids]
-        journal_ids = [x.id for x in form.journal_ids]
         number_next = form.number_next or 1
-        if not (period_ids and journal_ids):
+        padding = form.padding or 8
+        if not period_ids:
             raise orm.except_orm(_('No Data Available'),
                                  _('No records found for your selection!'))
         logger.debug("Searching for account moves to renumber.")
         move_obj = self.pool['account.move']
         sequence_obj = self.pool['ir.sequence']
-        sequences_seen = []
+        #sequences_seen = []
+        sequence_id = self.pool.get('ir.sequence').create(cr, uid, 
+                                    {'name': 'Renumber', 'number_next': number_next, 
+                                     'padding': padding}, context=context)
         for period in period_ids:
             move_ids = move_obj.search(cr, uid,
-                                       [('journal_id', 'in', journal_ids),
-                                        ('period_id', '=', period),
+                                       [('period_id', '=', period),
                                         ('state', '=', 'posted')],
                                        limit=0, order='date,id',
                                        context=context)
@@ -102,21 +99,22 @@ class wizard_renumber(orm.TransientModel):
                 continue
             logger.debug("Renumbering %d account moves." % len(move_ids))
             for move in move_obj.browse(cr, uid, move_ids, context=context):
-                sequence_id = self.get_sequence_id_for_fiscalyear_id(
-                    cr, uid,
-                    sequence_id=move.journal_id.sequence_id.id,
-                    fiscalyear_id=move.period_id.fiscalyear_id.id
-                )
-                if sequence_id not in sequences_seen:
-                    sequence_obj.write(cr, SUPERUSER_ID, [sequence_id],
-                                       {'number_next': number_next})
-                    sequences_seen.append(sequence_id)
+#                sequence_id = self.get_sequence_id_for_fiscalyear_id(
+#                    cr, uid,
+#                    sequence_id=move.journal_id.sequence_id.id,
+#                    fiscalyear_id=move.period_id.fiscalyear_id.id
+#                )
+#                if sequence_id not in sequences_seen:
+#                    sequence_obj.write(cr, SUPERUSER_ID, [sequence_id],
+#                                       {'number_next': number_next})
+#                    sequences_seen.append(sequence_id)
                 # Generate (using our own get_id) and write the new move number
-                c = {'fiscalyear_id': move.period_id.fiscalyear_id.id}
+                #c = {'fiscalyear_id': move.period_id.fiscalyear_id.id}
                 new_name = sequence_obj.next_by_id(
                     cr, uid,
-                    move.journal_id.sequence_id.id,
-                    context=c
+                    sequence_id,
+                    #move.journal_id.sequence_id.id,
+                    context=context
                 )
                 # Note: We can't just do a
                 # "move_obj.write(cr, uid, [move.id], {'name': new_name})"
@@ -126,7 +124,7 @@ class wizard_renumber(orm.TransientModel):
                 cr.execute('UPDATE account_move SET name=%s WHERE id=%s',
                            (new_name, move.id))
             logger.debug("%d account moves renumbered." % len(move_ids))
-        sequences_seen = []
+        #sequences_seen = []
         form.write({'state': 'renumber'})
         data_obj = self.pool['ir.model.data']
         view_ref = data_obj.get_object_reference(cr, uid, 'account',
@@ -136,9 +134,9 @@ class wizard_renumber(orm.TransientModel):
             'type': 'ir.actions.act_window',
             'name': _("Renumbered account moves"),
             'res_model': 'account.move',
-            'domain': ("[('journal_id','in',%s), ('period_id','in',%s), "
+            'domain': ("[('period_id','in',%s), "
                        "('state','=','posted')]"
-                       % (journal_ids, period_ids)),
+                       % (period_ids)),
             'view_type': 'form',
             'view_mode': 'tree',
             'view_id': view_id,
