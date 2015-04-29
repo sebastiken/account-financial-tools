@@ -17,7 +17,9 @@
                     <group string="Periods to consider">
                         <notebook colspan="4">
                             <page string="Periods">
-                                <field name="period_ids" editable="top"/>
+                                <label for="fy_id"/>
+                                <field name="fy_id" widget="selection"/>
+                                <field name="period_ids" domain="[('fiscalyear_id','=',fy_id)]" editable="top"/>
                             </page>
                         </notebook>
                     </group>

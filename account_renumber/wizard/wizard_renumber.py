@@ -24,11 +24,14 @@ from openerp.tools.translate import _
 from openerp import SUPERUSER_ID
 import logging
 
+logger = logging.getLogger("account_renumber")
 
 class wizard_renumber(orm.TransientModel):
     _name = "wizard.renumber"
     _description = "Account renumber wizard"
     _columns = {
+        'fy_id': fields.many2one('account.fiscalyear', 'Fiscal Year',
+                                  required=True),
         'period_ids': fields.many2many('account.period',
                                        'account_period_wzd_renumber_rel',
                                        'wizard_id', 'period_id',
@@ -74,9 +77,11 @@ class wizard_renumber(orm.TransientModel):
         Action that renumbers all the posted moves on the given
         journal and periods, and returns their ids.
         """
-        logger = logging.getLogger("account_renumber")
         form = self.browse(cr, uid, ids[0], context=context)
         period_ids = [x.id for x in form.period_ids]
+        # Guardamos todos los periodos que vamos a renumerar
+        # porque luego hacemos cambios a la lista period_ids
+        periods_to_renumber = period_ids[:]
         number_next = form.number_next or 1
         padding = form.padding or 8
         if not period_ids:
@@ -84,47 +89,46 @@ class wizard_renumber(orm.TransientModel):
                                  _('No records found for your selection!'))
         logger.debug("Searching for account moves to renumber.")
         move_obj = self.pool['account.move']
-        sequence_obj = self.pool['ir.sequence']
+        period_obj = self.pool['account.period']
         #sequences_seen = []
         sequence_id = self.pool.get('ir.sequence').create(cr, uid, 
                                     {'name': 'Renumber', 'number_next': number_next, 
                                      'padding': padding}, context=context)
-        for period in period_ids:
-            move_ids = move_obj.search(cr, uid,
-                                       [('period_id', '=', period),
+        # Primero numeramos los asientos del periodo de apertura
+        opening_period_id = period_obj.search(cr, uid,
+                                              [('special','=',True), ('id','in',period_ids)],
+                                              context=context)
+
+        if opening_period_id:
+            opening_period_id = opening_period_id[0]
+            logger.debug("Found opening Period %d." % opening_period_id)
+            # Quitamos el periodo de apertura para mas adelante
+            period_ids.remove(opening_period_id)
+
+            open_move_ids = move_obj.search(cr, uid,
+                                       [('period_id', '=', opening_period_id),
                                         ('state', '=', 'posted')],
                                        limit=0, order='date,id',
                                        context=context)
-            if not move_ids:
-                continue
-            logger.debug("Renumbering %d account moves." % len(move_ids))
-            for move in move_obj.browse(cr, uid, move_ids, context=context):
-#                sequence_id = self.get_sequence_id_for_fiscalyear_id(
-#                    cr, uid,
-#                    sequence_id=move.journal_id.sequence_id.id,
-#                    fiscalyear_id=move.period_id.fiscalyear_id.id
-#                )
-#                if sequence_id not in sequences_seen:
-#                    sequence_obj.write(cr, SUPERUSER_ID, [sequence_id],
-#                                       {'number_next': number_next})
-#                    sequences_seen.append(sequence_id)
-                # Generate (using our own get_id) and write the new move number
-                #c = {'fiscalyear_id': move.period_id.fiscalyear_id.id}
-                new_name = sequence_obj.next_by_id(
-                    cr, uid,
-                    sequence_id,
-                    #move.journal_id.sequence_id.id,
-                    context=context
-                )
-                # Note: We can't just do a
-                # "move_obj.write(cr, uid, [move.id], {'name': new_name})"
-                # cause it might raise a
-                # ``You can't do this modification on a confirmed entry``
-                # exception.
-                cr.execute('UPDATE account_move SET name=%s WHERE id=%s',
-                           (new_name, move.id))
-            logger.debug("%d account moves renumbered." % len(move_ids))
-        #sequences_seen = []
+
+            if open_move_ids:
+                logger.debug("Renumbering %d opening account moves." % len(open_move_ids))
+                self._renumber_moves(cr, uid, open_move_ids, sequence_id, context=context)
+
+        # Buscamos los demas movimientos
+        move_ids = move_obj.search(cr, uid,
+                                       [('period_id', 'in', period_ids),
+                                        ('state', '=', 'posted')],
+                                       limit=0, order='date,id',
+                                       context=context)
+
+        if not move_ids:
+            raise orm.except_orm(_('No Moves Available'),
+                                 _('No moves found for these periods!'))
+
+        self._renumber_moves(cr, uid, move_ids, sequence_id, context=context)
+        logger.debug("Renumbering %d account moves." % len(move_ids))
+
         form.write({'state': 'renumber'})
         data_obj = self.pool['ir.model.data']
         view_ref = data_obj.get_object_reference(cr, uid, 'account',
@@ -136,7 +140,7 @@ class wizard_renumber(orm.TransientModel):
             'res_model': 'account.move',
             'domain': ("[('period_id','in',%s), "
                        "('state','=','posted')]"
-                       % (period_ids)),
+                       % (periods_to_renumber)),
             'view_type': 'form',
             'view_mode': 'tree',
             'view_id': view_id,
@@ -144,3 +148,25 @@ class wizard_renumber(orm.TransientModel):
             'target': 'current',
         }
         return res
+
+    def _renumber_moves(self, cr, uid, move_ids, sequence_id, context=None):
+        move_obj = self.pool['account.move']
+        sequence_obj = self.pool['ir.sequence']
+
+        for move in move_obj.browse(cr, uid, move_ids, context=context):
+            new_name = sequence_obj.next_by_id(
+                cr, uid,
+                sequence_id,
+                #move.journal_id.sequence_id.id,
+                context=context
+            )
+            # Note: We can't just do a
+            # "move_obj.write(cr, uid, [move.id], {'name': new_name})"
+            # cause it might raise a
+            # ``You can't do this modification on a confirmed entry``
+            # exception.
+            cr.execute('UPDATE account_move SET name=%s WHERE id=%s',
+                       (new_name, move.id))
+        logger.debug("%d account moves renumbered." % len(move_ids))
+        #sequences_seen = []
+        return move_ids
