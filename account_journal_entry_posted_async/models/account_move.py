@@ -29,6 +29,7 @@ try:
     from openerp.addons.connector.queue.job import job
     from openerp.addons.connector.session import ConnectorSession
     from openerp.addons.connector.connector import install_in_connector
+    job = False
 except ImportError:
     job = False
 
